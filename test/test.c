@@ -160,6 +160,8 @@ int demo() {
   cprogress_render_tillcomplete(&cprogress, 2);
 
   cprogress_destroy(&cprogress);
+
+  return 0;
 }
 
 
