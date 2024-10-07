@@ -68,6 +68,8 @@ int test_internal() {
   puts("");
 
   cprogress_destroy(&cprogress);
+
+  return 0;
 }
 
 
@@ -85,18 +87,20 @@ int test_usage() {
   /* the whole rendering section here can be replaced with cprogress_render_tillcomplete(&cprogress, 30); */
   while (cprogress_stillrunning(&cprogress)) {
 
-    /* when updating data: you can do it in any thread, any it's not necessary to update title every time */
+    /* when updating data: you can do it in any task, any it's not necessary to update title every time */
     static float percentage = 0;
     for (int i = 0; i < 4; ++i) {
-      cprogress_updatethread_title(&cprogress, i, "Simple task");
-      cprogress_updatethread_percentage(&cprogress, i, percentage += 0.5);
+      cprogress_updatetask_title(&cprogress, i, "Simple task");
+      cprogress_updatetask_percentage(&cprogress, i, percentage += 0.5);
     }
 
     cprogress_render(&cprogress);
-    cprogress_waitfps(30);
+    cprogress_waitfps(&cprogress, 30);
   }
 
   cprogress_destroy(&cprogress);
+
+  return 0;
 }
 
 
@@ -106,31 +110,35 @@ int test_usage() {
 
 typedef struct {
   cprogress_t *cprogress;
-  int thread_index;
-} demo_threaddata_t;
+  int task_index;
+} demo_taskdata_t;
 
 void *demo_thread_updater(void *userdata) {
-  demo_threaddata_t *td = (demo_threaddata_t *) userdata;
+  demo_taskdata_t *td = (demo_taskdata_t *) userdata;
   cprogress_t *cprogress = td->cprogress;
-  int thread_index = td->thread_index;
+  int task_index = td->task_index;
 
   float percentage = 0;
 
   while (1) {
-    cprogress_updatethread_percentage(cprogress, thread_index, percentage += 10 + thread_index * 2);
+    cprogress_updatetask_percentage(cprogress, task_index, percentage += 10 + task_index * 2);
     jl_millisleep(1000);
   }
 }
 
 void *demo_thread_push_updater_delayed(void *userdata) {
-  demo_threaddata_t *td = (demo_threaddata_t *) userdata;
+  demo_taskdata_t *td = (demo_taskdata_t *) userdata;
   cprogress_t *cprogress = td->cprogress;
-  int thread_index = td->thread_index;
+  int task_index = td->task_index;
 
   jl_millisleep(7000);
-  cprogress_startthread(cprogress, thread_index);
-  cprogress_updatethread_title(cprogress, thread_index, "New task");
+  cprogress_starttask(cprogress, task_index);
+  cprogress_updatetask_title(cprogress, task_index, "New task");
   jl_createthread(demo_thread_updater, userdata, 0);
+}
+
+void demo_ontaskstop(cprogress_t *cprogress, int task_index) {
+  // printf("DEMO: task %d stopped\n", task_index);
 }
 
 int demo() {
@@ -139,27 +147,31 @@ int demo() {
     printf("error occured with code %d\n", cprogress.error);
     return 1;
   }
-  // cprogress_startallthreads(&cprogress);
+  // cprogress_startalltasks(&cprogress);
 
-  demo_threaddata_t threaddatas[4] = {};
+  cprogress_subscribeevent(&cprogress, CPROGRESS_EVENT_THREADSTOP, demo_ontaskstop);
+
+  demo_taskdata_t taskdatas[4] = {};
   for (int i = 0; i < 3; ++i) {
-    cprogress_startthread(&cprogress, i);
+    cprogress_starttask(&cprogress, i);
 
-    threaddatas[i] = (demo_threaddata_t) { &cprogress, i };
+    taskdatas[i] = (demo_taskdata_t) { &cprogress, i };
     char title[256] = {};
     snprintf(title, 255, "Simple task %d", i);
-    cprogress_updatethread_title(&cprogress, i, title);
+    cprogress_updatetask_title(&cprogress, i, title);
 
-    /* jl_createthread(thread_function, userdata, do_not_detach_from_current_thread) */
-    jl_createthread(demo_thread_updater, &threaddatas[i], 0);
+    /* jl_createtask(task_function, userdata, do_not_detach_from_current_task) */
+    jl_createthread(demo_thread_updater, &taskdatas[i], 0);
   }
 
-  threaddatas[3] = (demo_threaddata_t) { &cprogress, 3 };
-  jl_createthread(demo_thread_push_updater_delayed, &threaddatas[3], 0);
+  taskdatas[3] = (demo_taskdata_t) { &cprogress, 3 };
+  jl_createthread(demo_thread_push_updater_delayed, &taskdatas[3], 0);
 
   cprogress_render_tillcomplete(&cprogress, 2);
 
   cprogress_destroy(&cprogress);
+
+  return 0;
 }
 
 
