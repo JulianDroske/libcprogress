@@ -14,7 +14,7 @@
 
 
 void print_displaychunks(cprogress_t *cprogress) {
-  printf("there are %d displaychunks.\n", cprogress->displaychunks_length);
+  printf("there are %ld displaychunks.\n", cprogress->displaychunks_length);
   cprogress_displaychunk_foreach(cprogress, displaychunk) {
     switch (displaychunk->type) {
       default:
@@ -25,7 +25,7 @@ void print_displaychunks(cprogress_t *cprogress) {
         break;
       case CPROGRESS_DISPLAYCHUNK_LITERAL:
         puts("type: literal");
-        printf("literal: [%.*s]\n", displaychunk->literal_length, displaychunk->literal);
+        printf("literal: [%.*s]\n", (int)displaychunk->literal_length, displaychunk->literal);
         break;
       case CPROGRESS_DISPLAYCHUNK_BAR:
         puts("type: progress bar");
@@ -39,7 +39,7 @@ void print_displaychunks(cprogress_t *cprogress) {
     if (displaychunk->is_autospan) {
       puts("this chunk is auto spanned");
     } else if (displaychunk->span_width != CPROGRESS_UNDEF) {
-      printf("this chunk is adjusted to the length of %d chars\n", displaychunk->span_width);
+      printf("this chunk is adjusted to the length of %ld chars\n", displaychunk->span_width);
     }
 
     puts("");
