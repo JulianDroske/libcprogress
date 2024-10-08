@@ -87,6 +87,8 @@ int test_usage() {
   /* the whole rendering section here can be replaced with cprogress_render_tillcomplete(&cprogress, 30); */
   while (cprogress_stillrunning(&cprogress)) {
 
+    cprogress_beginrender(&cprogress);
+
     /* when updating data: you can do it in any task, any it's not necessary to update title every time */
     static float percentage = 0;
     for (int i = 0; i < 4; ++i) {
@@ -96,6 +98,8 @@ int test_usage() {
 
     cprogress_render(&cprogress);
     cprogress_waitfps(&cprogress, 30);
+
+    cprogress_endrender(&cprogress);
   }
 
   cprogress_destroy(&cprogress);

@@ -11,13 +11,12 @@
   Although it's a single-header library, it can also be used as a separate
   library, as most features are configured on runtime, see below.
 
-  Currently this lib only expected to run on Linux, since only POSIX apis are
-  used, e.g. ioctl, ANSI sequence code, etc. Windows may be supported in the
-  future, or even, without any platform-specific code.
+  Currently this lib only expected to run on Linux and Windows, so it has not
+  been tested under Unix, other Unix-like and other platforms.
 
 
-  USAGE
-  =====
+  IMPORTING
+  =========
 
   This is a single-header library, do the following anywhere to include this
   lib.
@@ -29,6 +28,16 @@
   | #define CPROGRESS_IMPL
   | #include "cprogress.h"
 
+  Define macros below GLOBALLY to tune behaviours
+
+  #define CPROGRESS_CONFIG_NOPLATFORM
+    Do not include any platform-specific codes, be useful for using core
+    functions on any platforms, but will lose the ability to render directly
+    without manually setting console width.
+
+
+  USAGE
+  =====
 
   The basic usage format is like:
 
@@ -42,7 +51,9 @@
   | // cprogress_render_tillcomplete(&cprogress, 2);
   | while (cprogress_stillrunning(&cprogress)) {
   |
+  |   cprogress_beginrender(&cprogress);
   |   cprogress_render(&cprogress);
+  |   cprogress_endrender(&cprogress);
   |
   |   // cprogress_waitms(&cprogress, 33);
   |   cprogress_waitfps(&cprogress, 30);
@@ -167,7 +178,9 @@
   |
   |   // render
   |   while (cprogress_stillrunning(&cprogress)) {
+  |     cprogress_beginrender(&cprogress);
   |     cprogress_render(&cprogress);
+  |     cprogress_endrender(&cprogress);
   |     cprogress_waitfps(30);
   |   }
   |
@@ -274,19 +287,28 @@ typedef void (cprogress_eventsubscriber_func_t (struct cprogress *cprogress, int
 typedef struct cprogress {
   cprogress_error_t error;
 
-  int has_autospan_element; /* deprecated */
+  /* creating */
+  int has_autospan_element;
 
   size_t displaychunks_length;
   cprogress_displaychunk_t *displaychunks;
 
   cprogress_stralloc_t stralloc;
 
+  /* running */
+
   int is_running;
+  int is_render_begin;
   int last_alive_task_count;
   size_t taskinfos_length;
   cprogress_taskinfo_t *taskinfos;
 
   cprogress_eventsubscriber_func_t *subscribers[CPROGRESS_EVENT_LENGTH];
+
+  /* platform */
+  int console_width;
+  int keep_consolewidth_loopcount;
+  char *line_buf;
 } cprogress_t;
 
 
@@ -310,19 +332,25 @@ size_t cprogress_writepercentage(char *buf, size_t buf_len, float percentage, si
 size_t cprogress_writeprogressbar(char *buf, size_t buf_len, char fill_char, float percentage);
 
 void cprogress_writeline(cprogress_t *cprogress, char *buf, size_t buf_len, size_t console_width, const char *title, float percentage);
-void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage);
+
 
 /* view controller */
 void cprogress_abort(cprogress_t *cprogress);
 int cprogress_stillrunning(cprogress_t *cprogress);
+
+void cprogress_beginrender(cprogress_t *cprogress);
+void cprogress_beginrender_consolewidth(cprogress_t *cprogress, int console_width);
+void cprogress_endrender(cprogress_t *cprogress);
+
+void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage);
 void cprogress_render(cprogress_t *cprogress);
 void cprogress_rendersum(cprogress_t *cprogress, const char *title);
-/* either must be called at the end of loop */
+/* view controller alternative: one line to show all till none left */
+void cprogress_render_tillcomplete(cprogress_t *cprogress, int fps);
+
 void cprogress_waitms(cprogress_t *cprogress, long ms);
 void cprogress_waitfps(cprogress_t *cprogress, int fps);
 
-/* view controller alternative: one line to show all till none left */
-void cprogress_render_tillcomplete(cprogress_t *cprogress, int fps);
 
 /* data provider */
 void cprogress_updatetask_title(cprogress_t *cprogress, int task_index, const char *title);
@@ -349,9 +377,6 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
 #include "string.h"
 #include "time.h"
 
-#include "sys/ioctl.h"
-#include "unistd.h"
-
 #define CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT 10
 #define CPROGRESS_DISPLAYCHUNK_MAXLEN 16
 
@@ -360,13 +385,9 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
 | utils & stralloc
 ----------------------------------------------------------------------------*/
 
-void cprogress_msleep(long ms) {
-  struct timespec ts = {
-    .tv_sec = ms / 1000L,
-    .tv_nsec = (ms % 1000) * 1000000
-  };
-  nanosleep(&ts, NULL);
-}
+#define cprogress_warn(msg) fprintf(stderr, "\n[W] cprogress(%d): %s\n", __LINE__, msg)
+#define cprogress_panic(msg) { fprintf(stderr, "\n[E] cprogress(%d): %s\n", __LINE__, msg); exit(1); }
+#define cprogress_panicf(msg, ...) { fprintf(stderr, "\n[E] cprogress(%d): " msg "\n", __LINE__, __VA_ARGS__); exit(1); }
 
 char *cprogress_strdup(const char *str) {
   if (str) {
@@ -407,6 +428,68 @@ void cprogress_stralloc_destroy(cprogress_stralloc_t *stralloc) {
     }
   }
 }
+
+
+/*----------------------------------------------------------------------------
+| platform compat layer
+----------------------------------------------------------------------------*/
+
+void cprogress_msleep(long ms);
+int cprogress_getconsolewidth();
+
+
+#ifdef CPROGRESS_CONFIG_NOPLATFORM
+
+void cprogress_msleep(long ms) {}
+int cprogress_getconsolewidth() { return CPROGRESS_UNDEF; }
+
+#elif defined(_WIN32)
+
+# include "windows.h"
+
+void cprogress_msleep(long ms) {
+  HANDLE timer;
+  if (!(timer = CreateWaitableTimer(NULL, TRUE, NULL)))
+    return;
+  LARGE_INTEGER li;
+  li.QuadPart = -(ms * 1000);
+  if (!SetWaitableTimer(timer, &li, 0, NULL, NULL, FALSE)) {
+    CloseHandle(timer);
+    return;
+  }
+  WaitForSingleObject(timer, INFINITE);
+  CloseHandle(timer);
+}
+
+int cprogress_getconsolewidth() {
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+  int columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+
+  return columns;
+}
+
+#else
+
+# include "sys/ioctl.h"
+# include "unistd.h"
+
+void cprogress_msleep(long ms) {
+  struct timespec ts = {
+    .tv_sec = ms / 1000L,
+    .tv_nsec = (ms % 1000) * 1000000
+  };
+  nanosleep(&ts, NULL);
+}
+
+int cprogress_getconsolewidth() {
+  struct winsize w = {};
+  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+  return w.ws_col;
+}
+
+#endif /* CPROGRESS_CONFIG_NOPLATFORM */
+
 
 
 /*----------------------------------------------------------------------------
@@ -510,7 +593,9 @@ cprogress_t cprogress_create(const char *fmt, int task_count) {
     .stralloc = cprogress_stralloc_create(strlen(fmt)),
     .is_running = 1,
     .taskinfos_length = task_count,
-    .taskinfos = (cprogress_taskinfo_t *) malloc((task_count + 1) * sizeof(cprogress_taskinfo_t))
+    .taskinfos = (cprogress_taskinfo_t *) malloc((task_count + 1) * sizeof(cprogress_taskinfo_t)),
+
+    .console_width = CPROGRESS_UNDEF
   };
 
   if (!cprogress.displaychunks || !cprogress.stralloc.buffer || !cprogress.taskinfos)
@@ -848,8 +933,10 @@ void cprogress_writeline(cprogress_t *cprogress, char *buf, size_t buf_len, size
     if (avail_length <= 0) break;
 
     size_t display_width = displaychunk->is_autospan? autospan_width: displaychunk->display_width;
-    if (display_width == CPROGRESS_UNDEF) {} /* well, we have no idea */
-    /* TODO error message */
+    if (display_width == CPROGRESS_UNDEF) {
+      /* well, we have no idea */
+      cprogress_panicf("failed to calculate element width after outputing %d chars", buf_len - avail_length);
+    }
 
     size_t print_length = 0;
     switch (displaychunk->type) {
@@ -877,46 +964,66 @@ void cprogress_writeline(cprogress_t *cprogress, char *buf, size_t buf_len, size
 | view controller
 ----------------------------------------------------------------------------*/
 
-int cprogress_getconsolewidth() {
-  struct winsize w;
-  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
-  return w.ws_col;
-}
-
 #define _cprogress_printline_widthtolength(width) (width * 4 + 1)
 
-void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage) {
-  /* TODO move to instance */
-  static int console_width = CPROGRESS_UNDEF;
-  static int keep_consolewidth_loopcount = 0;
 
-  static char *buf = NULL;
-  static size_t buf_len = 0;
+void cprogress_updatelinebuffer(cprogress_t *cprogress, int console_width) {
+  if (console_width == CPROGRESS_UNDEF) return;
 
-  if (console_width == CPROGRESS_UNDEF) {
+  size_t buf_len = _cprogress_printline_widthtolength(console_width);
+
+  cprogress->line_buf = cprogress->line_buf?
+    realloc(cprogress->line_buf, buf_len):
+    malloc(buf_len);
+
+  if (!cprogress->line_buf)
+    cprogress_panic("failed to alloc memory to store line chars");
+
+  cprogress->console_width = console_width;
+}
+
+void cprogress_autoupdateconsolewidth(cprogress_t *cprogress, int console_width) {
+  if (console_width == CPROGRESS_UNDEF &&
+    cprogress->keep_consolewidth_loopcount >= CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT ||
+    cprogress->console_width == CPROGRESS_UNDEF) {
     console_width = cprogress_getconsolewidth();
-    buf = malloc(buf_len = _cprogress_printline_widthtolength(console_width));
-    if (!buf) {} /* TODO well i have no idea neither */
-  } else if (keep_consolewidth_loopcount >= CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT) {
-    keep_consolewidth_loopcount = 0;
-    int new_console_width = cprogress_getconsolewidth();
-    if (new_console_width != console_width) {
-      buf = realloc(buf, buf_len = _cprogress_printline_widthtolength(console_width));
-      if (!buf) {} /* TODO same as above */
-      console_width = new_console_width;
-    }
+
+    if (console_width == CPROGRESS_UNDEF)
+      cprogress_panic("failed to get console width");
   }
 
-  /* actual draw */
+  if (console_width == CPROGRESS_UNDEF)
+    return;
 
-  memset(buf, 0, buf_len);
-  cprogress_writeline(cprogress, buf, buf_len, console_width, title, percentage);
-  printf("%s", buf);
-  fflush(stdout);
+  if (console_width != cprogress->console_width ||
+    !cprogress->line_buf) {
+    cprogress_updatelinebuffer(cprogress, console_width);
+    cprogress->keep_consolewidth_loopcount = 0;
+  }
 
-  /* misc */
+  ++cprogress->keep_consolewidth_loopcount;
+}
 
-  ++keep_consolewidth_loopcount;
+
+void cprogress_beginrender(cprogress_t *cprogress) {
+  return cprogress_beginrender_consolewidth(cprogress, CPROGRESS_UNDEF);
+}
+
+void cprogress_beginrender_consolewidth(cprogress_t *cprogress, int console_width) {
+  if (cprogress->is_render_begin == 1) {
+    
+  }
+  cprogress->is_render_begin = 1;
+  cprogress_autoupdateconsolewidth(cprogress, console_width);
+}
+
+void cprogress_endrender(cprogress_t *cprogress) {
+  if (!cprogress) return;
+
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    taskinfo->is_just_started = 0;
+    taskinfo->is_just_stopped = 0;
+  }
 }
 
 
@@ -944,22 +1051,20 @@ int cprogress_stillrunning(cprogress_t *cprogress) {
   return cprogress->is_running;
 }
 
-void cprogress_waitms(cprogress_t *cprogress, long ms) {
-  if (!cprogress || !ms) return;
 
-  cprogress_taskinfo_foreach(cprogress, taskinfo) {
-    taskinfo->is_just_started = 0;
-    taskinfo->is_just_stopped = 0;
-  }
-
-  cprogress_msleep(ms);
-}
-
-void cprogress_waitfps(cprogress_t *cprogress, int fps) {
+void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage) {
   if (!cprogress) return;
 
-  cprogress_waitms(cprogress, 1000L / fps);
+  int console_width = cprogress->console_width;
+  char *buf = cprogress->line_buf;
+  size_t buf_len = _cprogress_printline_widthtolength(console_width);
+
+  memset(buf, 0, buf_len);
+  cprogress_writeline(cprogress, buf, buf_len, console_width, title, percentage);
+  printf("%s", buf);
+  fflush(stdout);
 }
+
 
 /* only do clear and redraw in current line */
 void cprogress_renderline(cprogress_t *cprogress, const char *title, float percentage) {
@@ -1020,9 +1125,24 @@ void cprogress_render_tillcomplete(cprogress_t *cprogress, int fps) {
   if (!cprogress) return;
 
   while (cprogress_stillrunning(cprogress)) {
+    cprogress_beginrender(cprogress);
     cprogress_render(cprogress);
+    cprogress_endrender(cprogress);
     cprogress_waitfps(cprogress, fps);
   }
+}
+
+
+void cprogress_waitms(cprogress_t *cprogress, long ms) {
+  if (!cprogress) return;
+
+  cprogress_msleep(ms);
+}
+
+void cprogress_waitfps(cprogress_t *cprogress, int fps) {
+  if (!cprogress) return;
+
+  cprogress_waitms(cprogress, 1000L / fps);
 }
 
 
