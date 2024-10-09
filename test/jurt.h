@@ -379,7 +379,7 @@ void jl_nanosleep(int64_t nanoseconds){
 		if(!(timer = CreateWaitableTimer(NULL, TRUE, NULL)))
 			return;
 		/* Set timer properties */
-		li.QuadPart = -ns;
+		li.QuadPart = -nanoseconds;
 		if(!SetWaitableTimer(timer, &li, 0, NULL, NULL, FALSE)){
 			CloseHandle(timer);
 			return;
@@ -694,7 +694,11 @@ void* _JL_THREAD_WRAPPER(void* args){
 	jl_inf("thread %d end", arg.id);
 	// TODO on thread end ?
 	jl_thread_cleanup(arg.id);
-	return ret?ret:"normal exit";
+	return
+#ifdef JLOS_WINDOWS
+		(DWORD)
+#endif
+		(ret?ret:"normal exit");
 }
 
 

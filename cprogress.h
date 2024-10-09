@@ -8,18 +8,18 @@
 
   Show progress with pseudo-multi-thread support with immediate mode design.
 
-  Although it's a single-header library, it can also be used as a separate library, as
-  most features are configured on runtime, see below.
+  Although it's a single-header library, it can also be used as a separate
+  library, as most features are configured on runtime, see below.
 
-  Currently this lib only expected to run on Linux, since only POSIX apis are used,
-  e.g. ioctl, ANSI sequence code, etc. Windows may be supported in the future, or even,
-  without any platform-specific code.
+  Currently this lib only expected to run on Linux and Windows, so it has not
+  been tested under Unix, other Unix-like and other platforms.
 
 
-  USAGE
-  =====
+  IMPORTING
+  =========
 
-  This is a single-header library, do the following anywhere to include this lib
+  This is a single-header library, do the following anywhere to include this
+  lib.
 
   | #include "cprogress.h"
 
@@ -28,29 +28,72 @@
   | #define CPROGRESS_IMPL
   | #include "cprogress.h"
 
-  You need to define format before showing anything. CPROGRESS allows you to define it
-  while creating the instance.
+  Define macros below GLOBALLY to tune behaviours
 
-  | cprogress_t cprogress = cprogress_create(fmt: string, thread_count: int);
+  #define CPROGRESS_CONFIG_NOPLATFORM
+    Do not include any platform-specific codes, be useful for using core
+    functions on any platforms, but will lose the ability to render directly
+    without manually setting console width.
+
+
+  USAGE
+  =====
+
+  The basic usage format is like:
+
+  | cprogress_t cprogress = cprogress_create("$=t [$40b#] $p%", 4);
+  |
+  | cprogress_subscribeevent(&cprogress, ...);
+  |
+  | // cprogress_startalltasks(&cprogress);
+  | cprogress_starttask(&cprogress, ...);
+  |
+  | // cprogress_render_tillcomplete(&cprogress, 2);
+  | while (cprogress_stillrunning(&cprogress)) {
+  |
+  |   cprogress_beginrender(&cprogress);
+  |   cprogress_render(&cprogress);
+  |   cprogress_endrender(&cprogress);
+  |
+  |   // cprogress_waitms(&cprogress, 33);
+  |   cprogress_waitfps(&cprogress, 30);
+  | }
+  |
+  | cprogress_destroy(&cprogress);
+
+  Every line comment (starting with //) is equivalent to the code block on the
+  next line.
+
+
+  TUTORIAL
+  ========
+
+  You need to define format before showing anything. CPROGRESS allows you to
+  define it while creating the instance.
+
+  | cprogress_t cprogress = cprogress_create(fmt: string, task_count: int);
 
   [fmt] defines what it shows while displaying, see FORMAT below.
-  [thread_count] defines how many progresses will be shown, should be bigger than zero.
+  [task_count] defines how many progresses will be shown, should be positive.
   Returns an instance object. Any other APIs rely on it.
-  Errors are indicated with [cprogress.error], which is zero when everything works fine.
+  Errors are indicated with [cprogress.error], which is zero when everything
+  works fine.
 
   Then you may want to update every progress with:
 
-  | cprogress_updatethread_percentage(cprogress: cprogress_t *, thread_index: int, percentage: float);
+  | cprogress_updatetask_percentage(cprogress: cprogress_t *, task_index: int,
+  |   percentage: float);
 
-  It does not immediately update UI, but updates data only, which will be shown with
-  cprogress_render*(...).
+  It does not immediately update UI, but updates data only, which will be
+  shown with cprogress_render*(...).
   [cprogress] is usually [&cprogress] which was created above.
-  [thread_index] describes which thread data you want to update.
+  [task_index] describes which task data you want to update.
   [percentage] is a float number between 0 and 100.
 
   or update title with:
 
-  | cprogress_updatethread_title(cprogress: cprogress_t *, thread_index: int, const char *title);
+  | cprogress_updatetask_title(cprogress: cprogress_t *, task_index: int,
+  |   const char *title);
 
   [title] will be duplicated so it's safe to free it after calling.
 
@@ -63,11 +106,14 @@
   |   cprogress_waitfps(fps: int);
   | }
 
-  This is actually a basic concept of immediate mode ui. By calling cprogress_stillrunning(...),
-  program knows whether the whole process is complete. There are two reasons for returning
-  false by cprogress_stillrunning(...):
-    All progresses have reached 100%.
-    Anytime cprogress_abort(cprogress: cprogress_t *) has been called.
+  This is actually a basic concept of immediate mode ui. By calling
+  cprogress_stillrunning(...), program knows whether the whole process
+  is complete. There are two reasons for returning false by
+  cprogress_stillrunning(...):
+    - All progresses have reached 100%.
+    - Anytime cprogress_abort(cprogress: cprogress_t *) has been called.
+  cprogress_wait*(...) must be called at the end of loop in order to clean the
+  internal temporary state.
 
 
   FORMAT
@@ -82,29 +128,30 @@
   $[width]conversion[arg1]
 
   in which, [conversion] can be either:
-    t: prints title, can be changed using cprogress_updatethread_title(...)
+    t: prints title, can be changed using cprogress_updatetask_title(...)
     b: the progress bar without any decorations
       In this case, arg1 is made use of displaying the progress that is done
       and width is a necessary arg.
     p: prints percentage, in float
   while for [width]:
-    when as an integer: limits length and pad tailing spaces when not satisfied
-    when equals to "=": auto span, like [flex: 1] in flex boxes in CSS
-      This can only show once.
+    - when as an integer: limits length and pad tailing spaces when not
+      satisfied
+    - when equals to "=": auto span, like [flex: 1] in flex boxes in CSS.
+      + This can only show once.
 
   Any other characters or syntaxes will be ignored and be output directly.
 
   The example above will output like:
 
-    |                                                                  |
-    |Simple task      [############                            ] 31.00%|
-    |                                                                  |
+  |                                                                  |
+  |Simple task      [############                            ] 31.00%|
+  |                                                                  |
 
 
   EXAMPLE
   =======
 
-  The code below is a very basic OPCODE of drawing multithread progress.
+  The code below is a very basic OPCODE of drawing multithreaded progresses.
 
   | #include "stdio.h"
   |
@@ -113,11 +160,11 @@
   |
   | cprogress_t cprogress;
   |
-  | void thread_function(int thread_index) {
-  |   // assuming that you have thread management
-  |   float percentage = opcode_get_work_percentage(thread_index);
+  | void thread_function(int task_index) {
+  |   // assuming that you have multithread management
+  |   float percentage = opcode_get_work_percentage(task_index);
   |   // update data
-  |   cprogress_updatethread_percentage(&cprogress, thread_index, percentage);
+  |   cprogress_updatetask_percentage(&cprogress, task_index, percentage);
   | }
   |
   | int main(void) {
@@ -131,7 +178,9 @@
   |
   |   // render
   |   while (cprogress_stillrunning(&cprogress)) {
+  |     cprogress_beginrender(&cprogress);
   |     cprogress_render(&cprogress);
+  |     cprogress_endrender(&cprogress);
   |     cprogress_waitfps(30);
   |   }
   |
@@ -200,74 +249,82 @@ typedef struct {
 #define cprogress_displaychunk_foreach(cp, name) for (cprogress_displaychunk_t *name = (cp)->displaychunks; name->type; ++name)
 
 
-/* threadinfo */
+/* taskinfo */
 typedef struct {
   /* persistent */
   int is_valid; /* indicate if it's a EOF */
-  int thread_index;
+  int task_index;
 
   int is_running;
   char *title;
   float percentage;
 
   /* internal */
+  int is_just_started;
   int is_just_stopped;
-} cprogress_threadinfo_t;
+} cprogress_taskinfo_t;
 
-#define cprogress_getthreadinfo(cp, thread_index) ((cp)->threadinfos[thread_index])
-#define cprogress_threadinfo_getindex(threadinfo) ((threadinfo)->thread_index)
-#define cprogress_threadinfo_foreach(cp, name) for (cprogress_threadinfo_t *name = (cp)->threadinfos; name->is_valid; ++name)
+#define cprogress_gettaskinfo(cp, task_index) ((cp)->taskinfos[task_index])
+#define cprogress_taskinfo_getindex(taskinfo) ((taskinfo)->task_index)
+#define cprogress_taskinfo_foreach(cp, name) for (cprogress_taskinfo_t *name = (cp)->taskinfos; name->is_valid; ++name)
 
 
 /* subscribe */
 typedef enum {
   CPROGRESS_EVENT_NONE = CPROGRESS_UNDEF, /* a placeholder */
 
-  CPROGRESS_EVENT_THREADSTART, /* a thread was started */
-  CPROGRESS_EVENT_THREADFINISH, /* a thread was finished */
-  CPROGRESS_EVENT_FINISH, /* the full process was finished */
+  CPROGRESS_EVENT_THREADSTART, /* a task was started */
+  CPROGRESS_EVENT_THREADSTOP, /* a task was finished */
+  CPROGRESS_EVENT_STOP, /* the full process was finished */
 
   CPROGRESS_EVENT_LENGTH, /* indicate the maximum number of this enum, only use internally */
 } cprogress_event_type_t;
 
-typedef void (cprogress_eventsubscriber_func_t (struct cprogress *cprogress, cprogress_event_type_t type, int thread_index));
+typedef void (cprogress_eventsubscriber_func_t (struct cprogress *cprogress, int task_index));
 
 
 /* instance */
 typedef struct cprogress {
   cprogress_error_t error;
 
-  int has_autospan_element; /* deprecated */
+  /* creating */
+  int has_autospan_element;
 
   size_t displaychunks_length;
   cprogress_displaychunk_t *displaychunks;
 
   cprogress_stralloc_t stralloc;
 
+  /* running */
+
   int is_running;
-  int last_alive_thread_count;
-  size_t threadinfos_length;
-  cprogress_threadinfo_t *threadinfos;
+  int is_render_begin;
+  int last_alive_task_count;
+  size_t taskinfos_length;
+  cprogress_taskinfo_t *taskinfos;
 
   cprogress_eventsubscriber_func_t *subscribers[CPROGRESS_EVENT_LENGTH];
+
+  /* platform */
+  int console_width;
+  int keep_consolewidth_loopcount;
+  char *line_buf;
 } cprogress_t;
 
 
 
 /* instance */
-cprogress_t cprogress_create(const char *fmt, int thread_count);
+cprogress_t cprogress_create(const char *fmt, int task_count);
 void cprogress_destroy(cprogress_t *cprogress);
 
 /* object */
 
 
-/* task/thread controller */
-void cprogress_threadinfo_start(cprogress_threadinfo_t *threadinfo);
-void cprogress_threadinfo_abort(cprogress_threadinfo_t *threadinfo);
-void cprogress_startthread(cprogress_t *cprogress, int thread_index);
-void cprogress_abortthread(cprogress_t *cprogress, int thread_index);
+/* task controller */
+void cprogress_starttask(cprogress_t *cprogress, int task_index);
+void cprogress_aborttask(cprogress_t *cprogress, int task_index);
 
-void cprogress_startallthreads(cprogress_t *cprogress);
+void cprogress_startalltasks(cprogress_t *cprogress);
 
 /* view basic */
 size_t cprogress_writeliteral(char *buf, size_t buf_len, const char *literal, size_t alloc_width);
@@ -275,27 +332,33 @@ size_t cprogress_writepercentage(char *buf, size_t buf_len, float percentage, si
 size_t cprogress_writeprogressbar(char *buf, size_t buf_len, char fill_char, float percentage);
 
 void cprogress_writeline(cprogress_t *cprogress, char *buf, size_t buf_len, size_t console_width, const char *title, float percentage);
-void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage);
+
 
 /* view controller */
 void cprogress_abort(cprogress_t *cprogress);
 int cprogress_stillrunning(cprogress_t *cprogress);
-void cprogress_waitfps(int fps);
+
+void cprogress_beginrender(cprogress_t *cprogress);
+void cprogress_beginrender_consolewidth(cprogress_t *cprogress, int console_width);
+void cprogress_endrender(cprogress_t *cprogress);
+
+void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage);
 void cprogress_render(cprogress_t *cprogress);
 void cprogress_rendersum(cprogress_t *cprogress, const char *title);
-
 /* view controller alternative: one line to show all till none left */
 void cprogress_render_tillcomplete(cprogress_t *cprogress, int fps);
 
+void cprogress_waitms(cprogress_t *cprogress, long ms);
+void cprogress_waitfps(cprogress_t *cprogress, int fps);
+
+
 /* data provider */
-void cprogress_threadinfo_updatetitle(cprogress_threadinfo_t *threadinfo, const char *title);
-void cprogress_threadinfo_updatepercentage(cprogress_threadinfo_t *threadinfo, float percentage);
-void cprogress_updatethread_title(cprogress_t *cprogress, int thread_index, const char *title);
-void cprogress_updatethread_percentage(cprogress_t *cprogress, int thread_index, float percentage);
+void cprogress_updatetask_title(cprogress_t *cprogress, int task_index, const char *title);
+void cprogress_updatetask_percentage(cprogress_t *cprogress, int task_index, float percentage);
 
 /* event controller */
 void cprogress_subscribeevent(cprogress_t *cprogress, cprogress_event_type_t type, cprogress_eventsubscriber_func_t *func);
-void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, int thread_index);
+void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, int task_index);
 
 
 
@@ -314,9 +377,6 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
 #include "string.h"
 #include "time.h"
 
-#include "sys/ioctl.h"
-#include "unistd.h"
-
 #define CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT 10
 #define CPROGRESS_DISPLAYCHUNK_MAXLEN 16
 
@@ -325,13 +385,9 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
 | utils & stralloc
 ----------------------------------------------------------------------------*/
 
-void cprogress_msleep(long ms) {
-  struct timespec ts = {
-    .tv_sec = ms / 1000L,
-    .tv_nsec = (ms % 1000) * 1000000
-  };
-  nanosleep(&ts, NULL);
-}
+#define cprogress_warn(msg) fprintf(stderr, "\n[W] cprogress(%d): %s\n", __LINE__, msg)
+#define cprogress_panic(msg) { fprintf(stderr, "\n[E] cprogress(%d): %s\n", __LINE__, msg); exit(1); }
+#define cprogress_panicf(msg, ...) { fprintf(stderr, "\n[E] cprogress(%d): " msg "\n", __LINE__, __VA_ARGS__); exit(1); }
 
 char *cprogress_strdup(const char *str) {
   if (str) {
@@ -372,6 +428,68 @@ void cprogress_stralloc_destroy(cprogress_stralloc_t *stralloc) {
     }
   }
 }
+
+
+/*----------------------------------------------------------------------------
+| platform compat layer
+----------------------------------------------------------------------------*/
+
+void cprogress_msleep(long ms);
+int cprogress_getconsolewidth();
+
+
+#ifdef CPROGRESS_CONFIG_NOPLATFORM
+
+void cprogress_msleep(long ms) {}
+int cprogress_getconsolewidth() { return CPROGRESS_UNDEF; }
+
+#elif defined(_WIN32)
+
+# include "windows.h"
+
+void cprogress_msleep(long ms) {
+  HANDLE timer;
+  if (!(timer = CreateWaitableTimer(NULL, TRUE, NULL)))
+    return;
+  LARGE_INTEGER li;
+  li.QuadPart = -(ms * 1000);
+  if (!SetWaitableTimer(timer, &li, 0, NULL, NULL, FALSE)) {
+    CloseHandle(timer);
+    return;
+  }
+  WaitForSingleObject(timer, INFINITE);
+  CloseHandle(timer);
+}
+
+int cprogress_getconsolewidth() {
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+  int columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+
+  return columns;
+}
+
+#else
+
+# include "sys/ioctl.h"
+# include "unistd.h"
+
+void cprogress_msleep(long ms) {
+  struct timespec ts = {
+    .tv_sec = ms / 1000L,
+    .tv_nsec = (ms % 1000) * 1000000
+  };
+  nanosleep(&ts, NULL);
+}
+
+int cprogress_getconsolewidth() {
+  struct winsize w = {};
+  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+  return w.ws_col;
+}
+
+#endif /* CPROGRESS_CONFIG_NOPLATFORM */
+
 
 
 /*----------------------------------------------------------------------------
@@ -469,22 +587,27 @@ int cprogress_pushchunk(cprogress_t *cprogress, cprogress_displaychunk_t display
 
 
 #define _cprogress_create_returnerror(e) { cprogress_destroy(&cprogress); return (cprogress_t) { .error = e }; }
-cprogress_t cprogress_create(const char *fmt, int thread_count) {
+cprogress_t cprogress_create(const char *fmt, int task_count) {
   cprogress_t cprogress = {
     .displaychunks = (cprogress_displaychunk_t *) malloc(CPROGRESS_DISPLAYCHUNK_MAXLEN * sizeof(cprogress_displaychunk_t)),
     .stralloc = cprogress_stralloc_create(strlen(fmt)),
     .is_running = 1,
-    .threadinfos_length = thread_count,
-    .threadinfos = (cprogress_threadinfo_t *) malloc((thread_count + 1) * sizeof(cprogress_threadinfo_t))
+    .taskinfos_length = task_count,
+    .taskinfos = (cprogress_taskinfo_t *) malloc((task_count + 1) * sizeof(cprogress_taskinfo_t)),
+
+    .console_width = CPROGRESS_UNDEF
   };
 
-  if (!cprogress.displaychunks || !cprogress.stralloc.buffer || !cprogress.threadinfos)
+  if (!cprogress.displaychunks || !cprogress.stralloc.buffer || !cprogress.taskinfos)
     _cprogress_create_returnerror(CPROGRESS_ERROR_INTERNAL);
 
-  for (int i = 0; i < cprogress.threadinfos_length; ++i) {
-    cprogress.threadinfos[i] = (cprogress_threadinfo_t) { .is_valid = 1, .thread_index = i };
+  for (int i = 0; i < cprogress.taskinfos_length; ++i) {
+    cprogress.taskinfos[i] = (cprogress_taskinfo_t) {
+      .is_valid = 1,
+      .task_index = i,
+    };
   }
-  cprogress.threadinfos[cprogress.threadinfos_length] = (cprogress_threadinfo_t) { .is_valid = 0 };
+  cprogress.taskinfos[cprogress.taskinfos_length] = (cprogress_taskinfo_t) { .is_valid = 0 };
 
   const char *literal = NULL;
   size_t literal_length = 0;
@@ -610,11 +733,11 @@ void cprogress_destroy(cprogress_t *cprogress) {
   if (cprogress) {
     _cprogress_destroy_tryfree(cprogress->displaychunks);
     cprogress_stralloc_destroy(&cprogress->stralloc);
-    if (cprogress->threadinfos) {
-      cprogress_threadinfo_foreach(cprogress, threadinfo) {
-        cprogress_threadinfo_abort(threadinfo);
+    if (cprogress->taskinfos) {
+      cprogress_taskinfo_foreach(cprogress, taskinfo) {
+        cprogress_aborttask(cprogress, cprogress_taskinfo_getindex(taskinfo));
       }
-      _cprogress_destroy_tryfree(cprogress->threadinfos);
+      _cprogress_destroy_tryfree(cprogress->taskinfos);
     }
   }
 }
@@ -622,46 +745,47 @@ void cprogress_destroy(cprogress_t *cprogress) {
 
 
 /*----------------------------------------------------------------------------
-| task/thread controller
+| task controller
 ----------------------------------------------------------------------------*/
 
-void cprogress_threadinfo_start(cprogress_threadinfo_t *threadinfo) {
-  if (!threadinfo) return;
+void cprogress_starttask(cprogress_t *cprogress, int task_index) {
+  if (!cprogress || task_index < 0 || task_index >= cprogress->taskinfos_length) return;
 
-  if (threadinfo->title) {
-    free(threadinfo->title);
+  cprogress_taskinfo_t *taskinfo = &cprogress_gettaskinfo(cprogress, task_index);
+  if (!taskinfo) return;
+
+  if (taskinfo->title) {
+    free(taskinfo->title);
   }
-  threadinfo->title = NULL;
-  threadinfo->percentage = 0;
-  threadinfo->is_running = 1;
+  taskinfo->title = NULL;
+  taskinfo->percentage = 0;
+  taskinfo->is_just_started = 1;
+  taskinfo->is_just_stopped = 0;
+  taskinfo->is_running = 1;
+
+  cprogress_emitevent(cprogress, CPROGRESS_EVENT_THREADSTART, task_index);
 }
 
-void cprogress_threadinfo_abort(cprogress_threadinfo_t *threadinfo) {
-  if (!threadinfo) return;
+void cprogress_aborttask(cprogress_t *cprogress, int task_index) {
+  if (!cprogress || task_index < 0 || task_index >= cprogress->taskinfos_length) return;
 
-  threadinfo->is_running = 0;
-  threadinfo->is_just_stopped = 1;
-  /* let cprogress_threadinfo_start(...) and cprogress_abort(...) clean up everything
+  cprogress_taskinfo_t *taskinfo = &cprogress_gettaskinfo(cprogress, task_index);
+  if (!taskinfo) return;
+
+  taskinfo->is_running = 0;
+  taskinfo->is_just_started = 0;
+  taskinfo->is_just_stopped = 1;
+  /* let cprogress_taskinfo_start(...) and cprogress_abort(...) clean up everything
     because cprogress_render(...) uses the data here */
+
+  cprogress_emitevent(cprogress, CPROGRESS_EVENT_THREADSTOP, task_index);
 }
 
-void cprogress_startthread(cprogress_t *cprogress, int thread_index) {
-  if (!cprogress || thread_index < 0 || thread_index >= cprogress->threadinfos_length) return;
-
-  cprogress_threadinfo_start(&cprogress_getthreadinfo(cprogress, thread_index));
-}
-
-void cprogress_abortthread(cprogress_t *cprogress, int thread_index) {
-  if (!cprogress || thread_index < 0 || thread_index >= cprogress->threadinfos_length) return;
-
-  cprogress_threadinfo_abort(&cprogress_getthreadinfo(cprogress, thread_index));
-}
-
-void cprogress_startallthreads(cprogress_t *cprogress) {
+void cprogress_startalltasks(cprogress_t *cprogress) {
   if (!cprogress) return;
 
-  cprogress_threadinfo_foreach(cprogress, threadinfo) {
-    cprogress_threadinfo_start(threadinfo);
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    cprogress_starttask(cprogress, cprogress_taskinfo_getindex(taskinfo));
   }
 }
 
@@ -809,8 +933,10 @@ void cprogress_writeline(cprogress_t *cprogress, char *buf, size_t buf_len, size
     if (avail_length <= 0) break;
 
     size_t display_width = displaychunk->is_autospan? autospan_width: displaychunk->display_width;
-    if (display_width == CPROGRESS_UNDEF) {} /* well, we have no idea */
-    /* TODO error message */
+    if (display_width == CPROGRESS_UNDEF) {
+      /* well, we have no idea */
+      cprogress_panicf("failed to calculate element width after outputing %d chars", buf_len - avail_length);
+    }
 
     size_t print_length = 0;
     switch (displaychunk->type) {
@@ -838,46 +964,66 @@ void cprogress_writeline(cprogress_t *cprogress, char *buf, size_t buf_len, size
 | view controller
 ----------------------------------------------------------------------------*/
 
-int cprogress_getconsolewidth() {
-  struct winsize w;
-  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
-  return w.ws_col;
-}
-
 #define _cprogress_printline_widthtolength(width) (width * 4 + 1)
 
-void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage) {
-  /* TODO move to instance */
-  static int console_width = CPROGRESS_UNDEF;
-  static int keep_consolewidth_loopcount = 0;
 
-  static char *buf = NULL;
-  static size_t buf_len = 0;
+void cprogress_updatelinebuffer(cprogress_t *cprogress, int console_width) {
+  if (console_width == CPROGRESS_UNDEF) return;
 
-  if (console_width == CPROGRESS_UNDEF) {
+  size_t buf_len = _cprogress_printline_widthtolength(console_width);
+
+  cprogress->line_buf = cprogress->line_buf?
+    realloc(cprogress->line_buf, buf_len):
+    malloc(buf_len);
+
+  if (!cprogress->line_buf)
+    cprogress_panic("failed to alloc memory to store line chars");
+
+  cprogress->console_width = console_width;
+}
+
+void cprogress_autoupdateconsolewidth(cprogress_t *cprogress, int console_width) {
+  if (console_width == CPROGRESS_UNDEF &&
+    cprogress->keep_consolewidth_loopcount >= CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT ||
+    cprogress->console_width == CPROGRESS_UNDEF) {
     console_width = cprogress_getconsolewidth();
-    buf = malloc(buf_len = _cprogress_printline_widthtolength(console_width));
-    if (!buf) {} /* TODO well i have no idea neither */
-  } else if (keep_consolewidth_loopcount >= CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT) {
-    keep_consolewidth_loopcount = 0;
-    int new_console_width = cprogress_getconsolewidth();
-    if (new_console_width != console_width) {
-      buf = realloc(buf, buf_len = _cprogress_printline_widthtolength(console_width));
-      if (!buf) {} /* TODO same as above */
-      console_width = new_console_width;
-    }
+
+    if (console_width == CPROGRESS_UNDEF)
+      cprogress_panic("failed to get console width");
   }
 
-  /* actual draw */
+  if (console_width == CPROGRESS_UNDEF)
+    return;
 
-  memset(buf, 0, buf_len);
-  cprogress_writeline(cprogress, buf, buf_len, console_width, title, percentage);
-  printf("%s", buf);
-  fflush(stdout);
+  if (console_width != cprogress->console_width ||
+    !cprogress->line_buf) {
+    cprogress_updatelinebuffer(cprogress, console_width);
+    cprogress->keep_consolewidth_loopcount = 0;
+  }
 
-  /* misc */
+  ++cprogress->keep_consolewidth_loopcount;
+}
 
-  ++keep_consolewidth_loopcount;
+
+void cprogress_beginrender(cprogress_t *cprogress) {
+  return cprogress_beginrender_consolewidth(cprogress, CPROGRESS_UNDEF);
+}
+
+void cprogress_beginrender_consolewidth(cprogress_t *cprogress, int console_width) {
+  if (cprogress->is_render_begin == 1) {
+    
+  }
+  cprogress->is_render_begin = 1;
+  cprogress_autoupdateconsolewidth(cprogress, console_width);
+}
+
+void cprogress_endrender(cprogress_t *cprogress) {
+  if (!cprogress) return;
+
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    taskinfo->is_just_started = 0;
+    taskinfo->is_just_stopped = 0;
+  }
 }
 
 
@@ -891,8 +1037,8 @@ int cprogress_stillrunning(cprogress_t *cprogress) {
   if (!cprogress) return 0;
 
   int is_all_finished = 1;
-  cprogress_threadinfo_foreach(cprogress, threadinfo) {
-    if (threadinfo->is_running || threadinfo->is_just_stopped) {
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    if (taskinfo->is_running || taskinfo->is_just_stopped) {
       is_all_finished = 0;
       break;
     }
@@ -900,14 +1046,25 @@ int cprogress_stillrunning(cprogress_t *cprogress) {
 
   if (is_all_finished) cprogress_abort(cprogress);
 
-  if (!cprogress->is_running) cprogress_emitevent(cprogress, CPROGRESS_EVENT_FINISH, CPROGRESS_UNDEF);
+  if (!cprogress->is_running) cprogress_emitevent(cprogress, CPROGRESS_EVENT_STOP, CPROGRESS_UNDEF);
 
   return cprogress->is_running;
 }
 
-void cprogress_waitfps(int fps) {
-  cprogress_msleep(1000 / fps);
+
+void cprogress_printline(cprogress_t *cprogress, const char *title, float percentage) {
+  if (!cprogress) return;
+
+  int console_width = cprogress->console_width;
+  char *buf = cprogress->line_buf;
+  size_t buf_len = _cprogress_printline_widthtolength(console_width);
+
+  memset(buf, 0, buf_len);
+  cprogress_writeline(cprogress, buf, buf_len, console_width, title, percentage);
+  printf("%s", buf);
+  fflush(stdout);
 }
+
 
 /* only do clear and redraw in current line */
 void cprogress_renderline(cprogress_t *cprogress, const char *title, float percentage) {
@@ -920,49 +1077,46 @@ void cprogress_renderline(cprogress_t *cprogress, const char *title, float perce
 void cprogress_render(cprogress_t *cprogress) {
   if (!cprogress) return;
 
-  /* count how many threads are alive */
-  int alive_thread_count = 0;
-  cprogress_threadinfo_foreach(cprogress, threadinfo) {
-    if (threadinfo->is_running)
-      ++alive_thread_count;
+  /* count how many tasks are alive */
+  int alive_task_count = 0;
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    if (taskinfo->is_running)
+      ++alive_task_count;
   }
 
   /* move to head for redraw */
-  if (cprogress->last_alive_thread_count)
-    printf("\x1b[%dA", cprogress->last_alive_thread_count);
+  if (cprogress->last_alive_task_count)
+    printf("\x1b[%dA", cprogress->last_alive_task_count);
 
-  cprogress_threadinfo_foreach(cprogress, threadinfo) {
-    if (threadinfo->is_just_stopped) {
-      threadinfo->is_just_stopped = 0;
-      cprogress_renderline(cprogress, threadinfo->title, threadinfo->percentage);
-      puts(""); /* move to next line */
-      /* TODO move to cprogress_stillrunning(...) */
-      cprogress_emitevent(cprogress, CPROGRESS_EVENT_THREADFINISH, cprogress_threadinfo_getindex(threadinfo));
-    }
-  }
-
-  cprogress_threadinfo_foreach(cprogress, threadinfo) {
-    if (threadinfo->is_running) {
-      cprogress_renderline(cprogress, threadinfo->title, threadinfo->percentage);
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    if (taskinfo->is_just_stopped) {
+      cprogress_renderline(cprogress, taskinfo->title, taskinfo->percentage);
       puts(""); /* move to next line */
     }
   }
 
-  cprogress->last_alive_thread_count = alive_thread_count;
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    if (taskinfo->is_running) {
+      cprogress_renderline(cprogress, taskinfo->title, taskinfo->percentage);
+      puts(""); /* move to next line */
+    }
+  }
+
+  cprogress->last_alive_task_count = alive_task_count;
 }
 
 void cprogress_rendersum(cprogress_t *cprogress, const char *title) {
   if (!cprogress) return;
 
-  int alive_thread_count = 0;
+  int alive_task_count = 0;
   float percentage = 0;
-  cprogress_threadinfo_foreach(cprogress, threadinfo) {
-    if (threadinfo->is_running) {
-      percentage += threadinfo->percentage;
-      ++alive_thread_count;
+  cprogress_taskinfo_foreach(cprogress, taskinfo) {
+    if (taskinfo->is_running) {
+      percentage += taskinfo->percentage;
+      ++alive_task_count;
     }
   }
-  percentage /= alive_thread_count;
+  percentage /= alive_task_count;
 
   cprogress_renderline(cprogress, title, percentage);
 }
@@ -971,9 +1125,24 @@ void cprogress_render_tillcomplete(cprogress_t *cprogress, int fps) {
   if (!cprogress) return;
 
   while (cprogress_stillrunning(cprogress)) {
+    cprogress_beginrender(cprogress);
     cprogress_render(cprogress);
-    cprogress_waitfps(fps);
+    cprogress_endrender(cprogress);
+    cprogress_waitfps(cprogress, fps);
   }
+}
+
+
+void cprogress_waitms(cprogress_t *cprogress, long ms) {
+  if (!cprogress) return;
+
+  cprogress_msleep(ms);
+}
+
+void cprogress_waitfps(cprogress_t *cprogress, int fps) {
+  if (!cprogress) return;
+
+  cprogress_waitms(cprogress, 1000L / fps);
 }
 
 
@@ -981,34 +1150,34 @@ void cprogress_render_tillcomplete(cprogress_t *cprogress, int fps) {
 | data provider
 ----------------------------------------------------------------------------*/
 
-void cprogress_threadinfo_updatetitle(cprogress_threadinfo_t *threadinfo, const char *title) {
-  if (!threadinfo || !threadinfo->is_running) return;
+void cprogress_taskinfo_updatetitle(cprogress_taskinfo_t *taskinfo, const char *title) {
+  if (!taskinfo) return;
 
-  char *previous_title = threadinfo->title;
-  if (previous_title) free(previous_title);
 
-  threadinfo->title = cprogress_strdup(title);
 }
 
-void cprogress_threadinfo_updatepercentage(cprogress_threadinfo_t *threadinfo, float percentage) {
-  if (!threadinfo || !threadinfo->is_running) return;
+void cprogress_updatetask_title(cprogress_t *cprogress, int task_index, const char *title) {
+  if (!cprogress || task_index < 0 || task_index >= cprogress->taskinfos_length) return;
+  cprogress_taskinfo_t *taskinfo = &cprogress_gettaskinfo(cprogress, task_index);
+  if (!taskinfo || !taskinfo->is_running) return;
+
+  char *previous_title = taskinfo->title;
+  if (previous_title) free(previous_title);
+
+  taskinfo->title = cprogress_strdup(title);
+}
+
+void cprogress_updatetask_percentage(cprogress_t *cprogress, int task_index, float percentage) {
+  if (!cprogress || task_index < 0 || task_index >= cprogress->taskinfos_length) return;
+  cprogress_taskinfo_t *taskinfo = &cprogress_gettaskinfo(cprogress, task_index);
+  if (!taskinfo || !taskinfo->is_running) return;
 
   if (percentage >= 100) {
     percentage = 100;
-    cprogress_threadinfo_abort(threadinfo);
+    cprogress_aborttask(cprogress, task_index);
   }
   if (percentage < 0) percentage = 0;
-  threadinfo->percentage = percentage;
-}
-
-void cprogress_updatethread_title(cprogress_t *cprogress, int thread_index, const char *title) {
-  if (!cprogress || thread_index < 0 || thread_index >= cprogress->threadinfos_length) return;
-  cprogress_threadinfo_updatetitle(&cprogress_getthreadinfo(cprogress, thread_index), title);
-}
-
-void cprogress_updatethread_percentage(cprogress_t *cprogress, int thread_index, float percentage) {
-  if (!cprogress || thread_index < 0 || thread_index >= cprogress->threadinfos_length) return;
-  cprogress_threadinfo_updatepercentage(&cprogress_getthreadinfo(cprogress, thread_index), percentage);
+  taskinfo->percentage = percentage;
 }
 
 
@@ -1020,13 +1189,13 @@ void cprogress_subscribeevent(cprogress_t *cprogress, cprogress_event_type_t typ
   }
 }
 
-void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, int thread_index) {
+void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, int task_index) {
   if (!cprogress) return;
 
   if (type != CPROGRESS_EVENT_NONE && type < CPROGRESS_EVENT_LENGTH ||
-    (thread_index > 0 && thread_index < cprogress->threadinfos_length || thread_index == CPROGRESS_UNDEF)) {
+    (task_index > 0 && task_index < cprogress->taskinfos_length || task_index == CPROGRESS_UNDEF)) {
     cprogress_eventsubscriber_func_t *func = cprogress->subscribers[type];
-    if (func) func(cprogress, type, thread_index);
+    if (func) func(cprogress, task_index);
   }
 }
 
