@@ -83,12 +83,10 @@ int test_usage() {
     printf("error occured with code %d\n", cprogress.error);
     return 1;
   }
+  cprogress_startalltasks(&cprogress);
 
   /* the whole rendering section here can be replaced with cprogress_render_tillcomplete(&cprogress, 30); */
   while (cprogress_stillrunning(&cprogress)) {
-
-    cprogress_beginrender(&cprogress);
-
     /* when updating data: you can do it in any task, any it's not necessary to update title every time */
     static float percentage = 0;
     for (int i = 0; i < 4; ++i) {
@@ -96,10 +94,11 @@ int test_usage() {
       cprogress_updatetask_percentage(&cprogress, i, percentage += 0.5);
     }
 
+    cprogress_beginrender(&cprogress);
     cprogress_render(&cprogress);
-    cprogress_waitfps(&cprogress, 30);
-
     cprogress_endrender(&cprogress);
+
+    cprogress_waitfps(&cprogress, 30);
   }
 
   cprogress_destroy(&cprogress);
@@ -139,6 +138,11 @@ void *demo_thread_push_updater_delayed(void *userdata) {
   cprogress_starttask(cprogress, task_index);
   cprogress_updatetask_title(cprogress, task_index, "New task");
   jl_createthread(demo_thread_updater, userdata, 0);
+
+  cprogress_logf("a new thread has been started");
+
+  jl_millisleep(1000);
+  cprogress_abort(cprogress);
 }
 
 void demo_ontaskstop(cprogress_t *cprogress, int task_index) {

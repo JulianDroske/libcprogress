@@ -10,9 +10,6 @@ add_library(cprogress STATIC
     ${CMAKE_CURRENT_BINARY_DIR}/cprogress.c
 )
 
-# Create a temporary source file
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/cprogress.c "// This file is just for CMake linking")
-
 set_target_properties(cprogress PROPERTIES
     VERSION ${LIBCProgress_VERSION_MAJOR}.${LIBCProgress_VERSION_MINOR}
     SOVERSION ${LIBCProgress_VERSION_MAJOR}

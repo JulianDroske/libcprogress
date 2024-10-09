@@ -79,18 +79,25 @@
   Errors are indicated with [cprogress.error], which is zero when everything
   works fine.
 
-  Then you may want to update every progress with:
+  Then you may start a task, or start all tasks:
+
+  | cprogress_starttask(cprogress: cprogress_t *, task_index: int);
+  | cprogress_startalltasks(cprogress: cprogress_t *);
+
+  [cprogress] is usually [&cprogress] which was created above.
+  [task_index] describes which task you want to start.
+
+  A task should be started before any update on it. You may want to update
+  a task information with:
 
   | cprogress_updatetask_percentage(cprogress: cprogress_t *, task_index: int,
   |   percentage: float);
 
   It does not immediately update UI, but updates data only, which will be
   shown with cprogress_render*(...).
-  [cprogress] is usually [&cprogress] which was created above.
-  [task_index] describes which task data you want to update.
   [percentage] is a float number between 0 and 100.
 
-  or update title with:
+  or update the title with:
 
   | cprogress_updatetask_title(cprogress: cprogress_t *, task_index: int,
   |   const char *title);
@@ -99,10 +106,12 @@
 
   Updaters can be called from anywhere e.g. any thread.
 
-  Then in your main thread, you can write something like:
+  Then in your main thread, you can write in the form of:
 
   | while (cprogress_stillrunning(cprogress: cprogress_t *)) {
+  |   cprogress_beginrender(cprogress: cprogress_t *);
   |   cprogress_render(cprogress: cprogress_t *);
+  |   cprogress_endrender(cprogress: cprogress_t *);
   |   cprogress_waitfps(fps: int);
   | }
 
@@ -298,7 +307,7 @@ typedef struct cprogress {
   /* running */
 
   int is_running;
-  int is_render_begin;
+  int is_rendering;
   int last_alive_task_count;
   size_t taskinfos_length;
   cprogress_taskinfo_t *taskinfos;
@@ -360,7 +369,9 @@ void cprogress_updatetask_percentage(cprogress_t *cprogress, int task_index, flo
 void cprogress_subscribeevent(cprogress_t *cprogress, cprogress_event_type_t type, cprogress_eventsubscriber_func_t *func);
 void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, int task_index);
 
-
+/* util
+  if you want to show other things while rendering */
+void cprogress_logf(const char *fmt, ...);
 
 #endif /* !CPROGRESS_H */
 
@@ -374,6 +385,7 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
 
 #include "stdio.h"
 #include "stdlib.h"
+#include "stdarg.h"
 #include "string.h"
 #include "time.h"
 
@@ -385,9 +397,9 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
 | utils & stralloc
 ----------------------------------------------------------------------------*/
 
-#define cprogress_warn(msg) fprintf(stderr, "\n[W] cprogress(%d): %s\n", __LINE__, msg)
-#define cprogress_panic(msg) { fprintf(stderr, "\n[E] cprogress(%d): %s\n", __LINE__, msg); exit(1); }
-#define cprogress_panicf(msg, ...) { fprintf(stderr, "\n[E] cprogress(%d): " msg "\n", __LINE__, __VA_ARGS__); exit(1); }
+#define cprogress_warn(msg) fprintf(stderr, "\n[W] (cprogress:%d): %s\n", __LINE__, msg)
+#define cprogress_panic(msg) { fprintf(stderr, "\n[E] (cprogress:%d): %s\n", __LINE__, msg); exit(1); }
+#define cprogress_panicf(msg, ...) { fprintf(stderr, "\n[E] (cprogress:%d): " msg "\n", __LINE__, __VA_ARGS__); exit(1); }
 
 char *cprogress_strdup(const char *str) {
   if (str) {
@@ -435,13 +447,32 @@ void cprogress_stralloc_destroy(cprogress_stralloc_t *stralloc) {
 ----------------------------------------------------------------------------*/
 
 void cprogress_msleep(long ms);
-int cprogress_getconsolewidth();
+int cprogress_console_getwidth();
+
+/* cursor movement
+
+  _____________
+  |     -     |
+  |     ^     |
+  | - < x > + |
+  |     v     |
+  |     +     |
+  ^^^^^^^^^^^^^
+
+*/
+void cprogress_console_moverel(short x, short y);
+void cprogress_console_resetline();
+void cprogress_console_eraseline();
 
 
 #ifdef CPROGRESS_CONFIG_NOPLATFORM
 
+/* TODO fallbacks */
+
 void cprogress_msleep(long ms) {}
-int cprogress_getconsolewidth() { return CPROGRESS_UNDEF; }
+int cprogress_console_getwidth() { return 80; }
+void cprogress_console_moverel(short x, short y) {}
+void cprogress_console_resetline() {}
 
 #elif defined(_WIN32)
 
@@ -461,12 +492,42 @@ void cprogress_msleep(long ms) {
   CloseHandle(timer);
 }
 
-int cprogress_getconsolewidth() {
+int cprogress_console_getwidth() {
   CONSOLE_SCREEN_BUFFER_INFO csbi;
   GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
   int columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
 
   return columns;
+}
+
+COORD _cprogress_console_getcursorpos() {
+  CONSOLE_SCREEN_BUFFER_INFO cbsi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cbsi))
+    return cbsi.dwCursorPosition;
+  cprogress_panic("failed to get cursor position");
+}
+
+void cprogress_console_moveabs(short x, short y) {
+  COORD pos = _cprogress_console_getcursorpos();
+  if (x > 0) pos.X = x;
+  if (y > 0) pos.Y = y;
+  SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos);
+}
+
+void cprogress_console_moverel(short x, short y) {
+  COORD pos = _cprogress_console_getcursorpos();
+  pos.X += x;
+  pos.Y += y;
+  cprogress_console_moveabs(pos.X, pos.Y);
+}
+
+void cprogress_console_resetline() {
+  cprogress_console_moveabs(1, 0);
+  fflush(stdout);
+}
+
+void cprogress_console_eraseline() {
+  printf("\x1b[2K"); fflush(stdout);
 }
 
 #else
@@ -477,16 +538,51 @@ int cprogress_getconsolewidth() {
 void cprogress_msleep(long ms) {
   struct timespec ts = {
     .tv_sec = ms / 1000L,
-    .tv_nsec = (ms % 1000) * 1000000
+    .tv_nsec = (ms % 1000) * 1000000,
   };
   nanosleep(&ts, NULL);
 }
 
-int cprogress_getconsolewidth() {
+int cprogress_console_getwidth() {
   struct winsize w = {};
   ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
   return w.ws_col;
 }
+
+void cprogress_console_moverel(short x, short y) {
+  if (x > 0)
+    printf("\x1b[%dC", x);
+  else if (x < 0)
+    printf("\x1b[%dD", -x);
+
+  if (y > 0)
+    printf("\x1b[%dB", y);
+  else if (y < 0)
+    printf("\x1b[%dA", -y);
+
+  fflush(stdout);
+}
+
+/*
+void cprogress_console_moveabs(int x, int y) {
+  if (x > 0)
+    printf("\x1b[%dG", x);
+
+  if (y > 0)
+    cprogress_panic("moveabs::y not implemented");
+
+  fflush(stdout);
+}
+*/
+
+void cprogress_console_resetline() {
+  printf("\x1b[1G"); fflush(stdout);
+}
+
+void cprogress_console_eraseline() {
+  printf("\x1b[2K"); fflush(stdout);
+}
+
 
 #endif /* CPROGRESS_CONFIG_NOPLATFORM */
 
@@ -986,7 +1082,7 @@ void cprogress_autoupdateconsolewidth(cprogress_t *cprogress, int console_width)
   if (console_width == CPROGRESS_UNDEF &&
     cprogress->keep_consolewidth_loopcount >= CPROGRESS_CONSOLE_UPDATEWIDTH_LOOPCOUNT ||
     cprogress->console_width == CPROGRESS_UNDEF) {
-    console_width = cprogress_getconsolewidth();
+    console_width = cprogress_console_getwidth();
 
     if (console_width == CPROGRESS_UNDEF)
       cprogress_panic("failed to get console width");
@@ -1010,20 +1106,24 @@ void cprogress_beginrender(cprogress_t *cprogress) {
 }
 
 void cprogress_beginrender_consolewidth(cprogress_t *cprogress, int console_width) {
-  if (cprogress->is_render_begin == 1) {
-    
-  }
-  cprogress->is_render_begin = 1;
+  if (cprogress->is_rendering)
+    cprogress_panic("you forgot to call cprogress_endrender(...)  or called cprogress_beginrender(...) twice");
+
+  cprogress->is_rendering = 1;
   cprogress_autoupdateconsolewidth(cprogress, console_width);
 }
 
 void cprogress_endrender(cprogress_t *cprogress) {
   if (!cprogress) return;
+  if (!cprogress->is_rendering)
+    cprogress_panic("you forgot to call cprogress_beginrender(...) or called cprogress_endrender(...) twice");
 
   cprogress_taskinfo_foreach(cprogress, taskinfo) {
     taskinfo->is_just_started = 0;
     taskinfo->is_just_stopped = 0;
   }
+
+  cprogress->is_rendering = 0;
 }
 
 
@@ -1046,7 +1146,11 @@ int cprogress_stillrunning(cprogress_t *cprogress) {
 
   if (is_all_finished) cprogress_abort(cprogress);
 
-  if (!cprogress->is_running) cprogress_emitevent(cprogress, CPROGRESS_EVENT_STOP, CPROGRESS_UNDEF);
+  if (!cprogress->is_running) {
+    for (int i = 0; i < cprogress->last_alive_task_count; ++i)
+      puts("");
+    cprogress_emitevent(cprogress, CPROGRESS_EVENT_STOP, CPROGRESS_UNDEF);
+  }
 
   return cprogress->is_running;
 }
@@ -1056,10 +1160,12 @@ void cprogress_printline(cprogress_t *cprogress, const char *title, float percen
   if (!cprogress) return;
 
   int console_width = cprogress->console_width;
+  --console_width; /* give a space for cursor */
   char *buf = cprogress->line_buf;
   size_t buf_len = _cprogress_printline_widthtolength(console_width);
 
   memset(buf, 0, buf_len);
+  printf(" "); /* space for cursor */
   cprogress_writeline(cprogress, buf, buf_len, console_width, title, percentage);
   printf("%s", buf);
   fflush(stdout);
@@ -1069,8 +1175,11 @@ void cprogress_printline(cprogress_t *cprogress, const char *title, float percen
 /* only do clear and redraw in current line */
 void cprogress_renderline(cprogress_t *cprogress, const char *title, float percentage) {
   if (!cprogress) return;
+  if (!cprogress->is_rendering)
+    cprogress_panic("you forget to call cprogress_beginrender(...)");
 
-  printf("\x1b[1G\x1b[1K"); /* move to column 1, clear the entire line */
+  cprogress_console_resetline();
+  cprogress_console_eraseline();
   cprogress_printline(cprogress, title, percentage);
 }
 
@@ -1083,10 +1192,6 @@ void cprogress_render(cprogress_t *cprogress) {
     if (taskinfo->is_running)
       ++alive_task_count;
   }
-
-  /* move to head for redraw */
-  if (cprogress->last_alive_task_count)
-    printf("\x1b[%dA", cprogress->last_alive_task_count);
 
   cprogress_taskinfo_foreach(cprogress, taskinfo) {
     if (taskinfo->is_just_stopped) {
@@ -1103,6 +1208,12 @@ void cprogress_render(cprogress_t *cprogress) {
   }
 
   cprogress->last_alive_task_count = alive_task_count;
+
+  /* move to head for redraw */
+  if (cprogress->last_alive_task_count) {
+    cprogress_console_moverel(0, (short) -cprogress->last_alive_task_count);
+    cprogress_console_resetline();
+  }
 }
 
 void cprogress_rendersum(cprogress_t *cprogress, const char *title) {
@@ -1199,6 +1310,19 @@ void cprogress_emitevent(cprogress_t *cprogress, cprogress_event_type_t type, in
   }
 }
 
+
+/*----------------------------------------------------------------------------
+| data provider
+----------------------------------------------------------------------------*/
+
+void cprogress_logf(const char *fmt, ...) {
+  va_list va;
+  cprogress_console_resetline();
+  cprogress_console_eraseline();
+  va_start(va, fmt);
+  vprintf(fmt, va); puts("");
+  va_end(va);
+}
 
 
 #endif /* !CPROGRESS_IMPL_ */
